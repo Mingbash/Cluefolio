@@ -1,0 +1,22 @@
+name: CI
+on:
+  push:
+  pull_request:
+permissions:
+  contents: read
+jobs:
+  build:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: npm
+      - run: npm ci
+      - run: npm ci --ignore-scripts
+        working-directory: packages/opencli-plugin
+      - run: node --check packages/opencli-plugin/commands.js
+      - run: npm test
+      - run: npm run build
+      - run: npm run release:candidate

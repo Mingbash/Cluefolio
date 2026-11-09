@@ -1,0 +1,236 @@
+<!doctype html>
+<html lang="zh-CN">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Cluefolio · 选择笔记</title>
+<style>
+  :root { color-scheme: light dark; font: 14px system-ui; }
+  body { margin: 0; padding: 12px; }
+  h2 { margin: 0 0 10px; font-size: 17px; }
+  button, input, select { font: inherit; padding: 5px 8px; }
+  label { cursor: pointer; }
+  .row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin: 8px 0; }
+  .notes { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 210px), 1fr)); gap: 6px; max-height: 320px; overflow: auto; }
+  .note { border: 1px solid GrayText; border-radius: 6px; display: flex; align-items: flex-start; gap: 6px; padding: 8px; overflow-wrap: anywhere; }
+  small { display: block; margin-top: 4px; color: GrayText; }
+  [role=status] { margin: 6px 0 0; overflow-wrap: anywhere; }
+</style>
+<h2>Cluefolio · 选择笔记</h2>
+<section id="picker" hidden>
+  <div class="row">
+    <label>项目 <select id="projects"></select></label>
+    <label>搜索 <input type="search" id="search" maxlength="100"></label>
+    <label><input type="checkbox" id="savedOnly"> 只看工作台已选</label>
+    <button id="refresh">刷新</button>
+  </div>
+  <div id="notes" class="notes" aria-label="笔记列表"></div>
+  <div class="row">
+    <button id="prev">上一页</button><span id="page"></span><button id="next">下一页</button>
+  </div>
+  <div class="row">
+    <button id="start" disabled>开始蒸馏</button>
+    <button id="clear" disabled>清空选择</button>
+    <span id="count"></span>
+  </div>
+</section>
+<div id="job" class="row" hidden>
+  <button id="pause" hidden>暂停</button>
+  <button id="continue" hidden>继续蒸馏</button>
+  <span id="jobId"></span>
+</div>
+<p id="status" role="status" aria-live="polite">正在连接 Codex…</p>
+<script>
+  const el = id => document.getElementById(id);
+  const selection = new Set();
+  const types = { text: "文字", image: "图文", video: "视频", unknown: "类型待确认" };
+  let pickerId, jobId, projectId, projectLocked = false, limit = 0, page = 0, query = "", refreshId = 0, busy = false;
+  const pending = new Map();
+  let nextId = 0;
+  function post(message) {
+    parent.postMessage({ jsonrpc: "2.0", ...message }, "*");
+  }
+  function request(method, params) {
+    return new Promise((resolve, reject) => {
+      const id = ++nextId;
+      const timeout = setTimeout(() => {
+        pending.delete(id);
+        reject(new Error(method + " 超时"));
+      }, 10000);
+      pending.set(id, { resolve, reject, timeout });
+      post({ id, method, params });
+    });
+  }
+  addEventListener("message", ({ source, data }) => {
+    if (source !== parent || data?.jsonrpc !== "2.0") return;
+    if (data.method === "ui/resource-teardown" || data.method === "ping") {
+      post({ id: data.id, result: {} });
+      return;
+    }
+    if (data.method === "ui/notifications/tool-result") {
+      const result = data.params?.structuredContent;
+      if (result?.pickerId) void openPicker(result).catch(showError);
+      return;
+    }
+    if (data.method || !pending.has(data.id)) return;
+    const { resolve, reject, timeout } = pending.get(data.id);
+    clearTimeout(timeout);
+    pending.delete(data.id);
+    if (data.error) reject(new Error(data.error.message));
+    else resolve(data.result);
+  });
+  function resize() {
+    post({ method: "ui/notifications/size-changed", params: { height: document.documentElement.scrollHeight } });
+  }
+
+  const showError = error => { el("status").textContent = error.message; resize(); };
+  async function tool(name, args = {}) {
+    const result = await request("tools/call", { name, arguments: args });
+    if (result?.isError) throw new Error(result.content?.[0]?.text || "调用失败");
+    return result.structuredContent;
+  }
+  function selectionChanged() {
+    el("count").textContent = "已选 " + selection.size + " / " + limit + " 篇";
+    el("start").disabled = busy || !selection.size || selection.size > limit;
+    el("clear").disabled = busy || !selection.size;
+    for (const input of el("notes").querySelectorAll("input")) {
+      input.checked = selection.has(input.value);
+      input.disabled = busy || (!input.checked && selection.size >= limit);
+    }
+  }
+  async function loadNotes() {
+    const requestId = ++refreshId;
+    if (!projectId) return;
+    const result = await tool("picker_notes", { projectId, page, query, savedOnly: el("savedOnly").checked });
+    if (requestId !== refreshId || jobId) return;
+    limit = result.limit;
+    const pages = Math.max(1, Math.ceil(result.total / 12));
+    if (page >= pages) { page = pages - 1; return loadNotes(); }
+    const list = el("notes");
+    list.replaceChildren();
+    for (const note of result.notes) {
+      const label = document.createElement("label");
+      label.className = "note";
+      const input = document.createElement("input");
+      input.type = "checkbox";
+      input.value = note.id;
+      input.addEventListener("change", () => {
+        if (input.checked) selection.add(note.id);
+        else selection.delete(note.id);
+        selectionChanged();
+      });
+      const details = document.createElement("span");
+      details.textContent = note.title;
+      const meta = document.createElement("small");
+      meta.textContent = (types[note.type] || types.unknown) + " · 赞 " + (note.likes ?? "—") + " · 收藏 " + (note.collects ?? "—");
+      details.append(meta);
+      label.append(input, details);
+      list.append(label);
+    }
+    el("page").textContent = (page + 1) + " / " + pages;
+    el("prev").disabled = page === 0;
+    el("next").disabled = page + 1 >= pages;
+    el("status").textContent = result.scan === "running" ? "正在导入笔记，可点刷新查看新结果。"
+      : result.total ? "勾选需要蒸馏的笔记。" : "没有符合条件的笔记，可更换项目或刷新。";
+    selectionChanged();
+    resize();
+  }
+  async function openPicker(result) {
+    if (pickerId) return;
+    pickerId = result.pickerId;
+    const { projects } = await tool("picker_projects");
+    if (!projects.length) {
+      el("status").textContent = "本机暂无项目。请让 Codex 导入笔记链接，或在本地工作台导入。";
+      resize();
+      return;
+    }
+    for (const project of projects) {
+      const option = document.createElement("option");
+      option.value = project.id;
+      option.textContent = project.name + "（" + project.count + " 篇）";
+      el("projects").append(option);
+    }
+    projectLocked = Boolean(result.projectId);
+    projectId = result.projectId || projects[0].id;
+    el("projects").value = projectId;
+    el("projects").disabled = projectLocked;
+    el("picker").hidden = false;
+    await loadNotes();
+  }
+  el("projects").onchange = () => {
+    projectId = el("projects").value;
+    selection.clear();
+    el("notes").replaceChildren();
+    selectionChanged();
+    page = 0;
+    void loadNotes().catch(showError);
+  };
+  el("search").onchange = () => { query = el("search").value; page = 0; void loadNotes().catch(showError); };
+  el("savedOnly").onchange = () => { page = 0; void loadNotes().catch(showError); };
+  el("refresh").onclick = () => void loadNotes().catch(showError);
+  el("prev").onclick = () => { page--; void loadNotes().catch(showError); };
+  el("next").onclick = () => { page++; void loadNotes().catch(showError); };
+  el("clear").onclick = () => { selection.clear(); selectionChanged(); };
+  async function handoff() {
+    const reply = await request("ui/message", {
+      role: "user",
+      content: [{ type: "text", text: JSON.stringify({ event: "shizhi_start", jobId }) }],
+    });
+    if (reply?.isError) throw new Error("Codex 未接收任务，可在对话中用任务编号继续");
+  }
+  let polling = false;
+  let timer;
+  async function progress() {
+    if (polling) return;
+    polling = true;
+    try {
+      const job = await tool("picker_status", { jobId });
+      if (job.status === "complete") clearInterval(timer);
+      el("jobId").textContent = "任务 " + jobId;
+      el("pause").hidden = job.status !== "running";
+      el("continue").hidden = job.status === "running" || job.status === "complete";
+      el("status").textContent = job.stage + " · 已处理 " + job.processed + " / " + job.selected + " 篇 · 已保存 " + job.checkpoints + " 个模型步骤" +
+        (job.error ? " · " + job.error : "") +
+        (job.context ? " · Context " + job.context.contextId : "");
+      resize();
+    } catch (error) { showError(error); }
+    finally { polling = false; }
+  }
+  el("start").onclick = async () => {
+    busy = true;
+    selectionChanged();
+    el("projects").disabled = true;
+    try {
+      const prepared = await tool("picker_prepare", { pickerId, projectId, noteIds: [...selection] });
+      jobId = prepared.jobId;
+      el("picker").hidden = true;
+      el("job").hidden = false;
+      el("jobId").textContent = "任务 " + jobId;
+      el("status").textContent = "正在交给 Codex…";
+      timer = setInterval(progress, 3500);
+      await handoff();
+      await progress();
+    } catch (error) {
+      showError(error);
+      el("continue").hidden = !jobId;
+      busy = false;
+      el("projects").disabled = projectLocked;
+      selectionChanged();
+    }
+  };
+  el("pause").onclick = async () => {
+    try { await tool("pause_distillation", { jobId }); await progress(); }
+    catch (error) { showError(error); }
+  };
+  el("continue").onclick = async () => {
+    try { await handoff(); await progress(); }
+    catch (error) { showError(error); }
+  };
+  request("ui/initialize", {
+    appInfo: { name: "shizhi-desktop", version: "0.1.0" },
+    appCapabilities: {}, protocolVersion: "2026-01-26",
+  }).then(() => {
+    post({ method: "ui/notifications/initialized" });
+    resize();
+  }).catch(showError);
+</script>
+</html>
