@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { once } from "node:events";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, rm, readFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { createInterface } from "node:readline";
@@ -23,6 +23,7 @@ function connect(dataDir: string) {
     env: {
       ...process.env,
       XHS_DATA_DIR: dataDir,
+      CODEX_HOME: path.join(path.dirname(dataDir), "codex-home"),
       CODEX_BIN: "/nonexistent/codex",
     },
     stdio: ["pipe", "pipe", "ignore"],
@@ -60,7 +61,7 @@ test(
   "Desktop MCP resumes the same multi-batch Context after its worker is killed",
   { timeout: 30_000 },
   async () => {
-    const root = await mkdtemp(path.join(os.tmpdir(), "shizhi-desktop-test-"));
+    const root = await mkdtemp(path.join(os.tmpdir(), "cluefolio-desktop-test-"));
     const dataDir = path.join(root, "data");
     const cfg = config(root, { dataDir });
     const sdk = new Distiller(cfg);
@@ -127,7 +128,7 @@ test(
       const resource = await client.rpc("resources/read", {
         uri: descriptor._meta.ui.resourceUri,
       });
-      assert.match(resource.contents[0].text, /开始蒸馏/);
+      assert.match(resource.contents[0].text, /开始构建/);
       const { pickerId } = await client.call("open_note_picker", {
         projectId: project.id,
       });
@@ -254,6 +255,8 @@ test(
       assert.equal(complete.checkpoints, 8);
       assert.equal(complete.context.processedClaims, 24);
       assert.ok(complete.context.tokenUsed > beforeRestart);
+      assert.equal(complete.context.skillName, complete.context.contextId);
+      assert.match(await readFile(path.join(root, "codex-home", "skills", complete.context.skillName, "SKILL.md"), "utf8"), /cluefolio-desktop\.build_context_packet/);
       const context = complete.context;
       assert.equal(
         (
@@ -268,6 +271,20 @@ test(
         "如何验证需求",
       );
       assert.ok(packet.evidence.length > 0);
+      assert.ok(packet.answerProtocol.some((rule: string) => rule.includes("当前一手来源")));
+      const previousHome = process.env.CODEX_HOME;
+      process.env.CODEX_HOME = path.join(root, "codex-home");
+      const partialSdk = new Distiller(cfg);
+      try {
+        const partial = partialSdk.prepareDesktopJob(project.id, [noteIds[0], noteIds[1]]);
+        partial.noteStates[noteIds[0]].extract = "complete";
+        partialSdk.store.put("job", partial);
+        const draft = await partialSdk.finishPartialJob(partial.id);
+        assert.equal(draft.context?.status, "draft");
+        assert.equal(draft.status, "paused");
+        assert.equal(draft.context?.skillName, draft.context?.contextId);
+        assert.match(await readFile(path.join(root, "codex-home", "skills", draft.context!.contextId, "SKILL.md"), "utf8"), /草稿/);
+      } finally { await partialSdk.close(); if (previousHome === undefined) delete process.env.CODEX_HOME; else process.env.CODEX_HOME = previousHome; }
       await rm(path.join(dataDir, "projects", project.id, "notes", noteIds[0], "analysis.json"), { force: true });
       const laterPicker = await client.call("open_note_picker", { projectId: project.id });
       const limited = await client.call("picker_prepare", { pickerId: laterPicker.pickerId, projectId: project.id, noteIds: [noteIds[0]] });

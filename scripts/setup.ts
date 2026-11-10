@@ -2,6 +2,7 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { mkdir, stat } from "node:fs/promises";
 import { config, run } from "../packages/sdk/src/index.ts";
+import { migrateLocalRegistration } from "./migrate-local-registration.ts";
 const cfg = config();
 await mkdir(path.dirname(cfg.visionBin), { recursive: true });
 await run(
@@ -27,6 +28,8 @@ await run(
   { timeout: 120000 },
 );
 console.log("OCR 和 OpenCLI 插件已安装。");
+console.log("本机 MCP 连接：", await migrateLocalRegistration());
+await run(process.execPath, ["--import", "tsx", path.resolve("scripts/context-install-existing.ts")], { timeout: 60_000 });
 for (const bin of [cfg.ffmpegBin, cfg.whisperBin])
   try {
     await run(bin, ["-h"], { timeout: 10000 });

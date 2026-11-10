@@ -53,7 +53,7 @@ export async function serveContextMcp(runtime: ContextRuntime, input = process.s
         result = {
           protocolVersion: ["2024-11-05", "2025-03-26", "2025-06-18", "2025-11-25"].includes(offered) ? offered : "2024-11-05",
           capabilities: { tools: {}, ...(extension ? { resources: {} } : {}) },
-          serverInfo: { name: extension?.name ?? "shizhi-context", version: "0.1.0" },
+          serverInfo: { name: extension?.name ?? "cluefolio-context", version: "0.1.0" },
           ...(extension ? { instructions: extension.instructions } : {}),
         };
       } else if (request.method === "ping") result = {};

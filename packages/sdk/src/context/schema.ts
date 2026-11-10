@@ -68,6 +68,7 @@ export type Claim = {
   tags: string[];
   noteId?: string;
   legacyMethodId?: string;
+  temporal?: { sensitivity: "time-sensitive" | "durable-principle" | "unknown"; sourceDate: string | null; reason: string };
 };
 
 export type ProvenanceRelation = "quotes" | "paraphrases" | "translates" | "summarizes" | "applies" | "extends" | "critiques" | "curates" | "supports";
@@ -108,6 +109,7 @@ export type ContextStatement = {
   exceptions: string[];
   claimIds: string[];
   conflicts: string[];
+  temporal?: { sensitivity: "time-sensitive" | "durable-principle" | "unknown"; sourceDate: string | null; reason: string };
 };
 
 export type CoreThesis = ContextStatement & { kind: "thesis" };

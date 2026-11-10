@@ -97,6 +97,7 @@ export type Project = {
   name: string;
   skillName: string;
   purpose: string;
+  tokenBudget?: number;
   limit: number;
   selected: string[];
   createdAt: string;
@@ -130,6 +131,9 @@ export type Job = {
   selected: string[];
   skillName: string;
   purpose: string;
+  tokenBudget?: number;
+  budgetEstimate?: { additional: number; remainingNotes: string[]; remainingTitles: string[]; estimated: boolean };
+  budget?: { used: number; hardLimit: number; remaining: number };
   createdAt: string;
   updatedAt: string;
   error?: string;
@@ -142,6 +146,8 @@ export type Job = {
     totalClaims: number;
     unresolvedClaims: number;
     tokenUsed: number;
+    skillName?: string;
+    skillPath?: string;
   };
 };
 export type Config = {

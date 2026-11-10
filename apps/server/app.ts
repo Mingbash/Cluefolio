@@ -73,10 +73,11 @@ export async function createApp(
         skillName: z.string().default("creator-advisor"),
         limit: z.number().int().min(1).max(100).default(10),
         purpose: z.string().default(""),
+        tokenBudget: z.number().int().min(10_000).max(20_000_000).default(1_000_000),
       })
       .parse(req.body);
     return publicProject(
-      sdk.createProject(x.name, x.skillName, x.limit, x.purpose),
+      sdk.createProject(x.name, x.skillName, x.limit, x.purpose, x.tokenBudget),
     );
   });
   app.get("/api/projects/:id", async (req) =>
@@ -89,6 +90,7 @@ export async function createApp(
         skillName: z.string().optional(),
         purpose: z.string().optional(),
         limit: z.number().int().min(1).max(100).optional(),
+        tokenBudget: z.number().int().min(10_000).max(20_000_000).optional(),
         selected: z.array(z.string()).optional(),
       })
       .strict()
@@ -210,7 +212,7 @@ export async function createApp(
   );
   app.get("/api/jobs", async () => {
     sdk.store.recover();
-    return sdk.store.list<Job>("job");
+    return sdk.store.list<Job>("job").map(job => sdk.getJob(job.id));
   });
   app.post("/api/projects/:id/desktop-jobs", async (req) => {
     const project = sdk.store.project(id(req));
@@ -220,6 +222,8 @@ export async function createApp(
     sdk.startDistillation(id(req)),
   );
   app.post("/api/jobs/:id/cancel", async (req) => sdk.cancelJob(id(req)));
+  app.post("/api/jobs/:id/budget", async (req) => sdk.raiseJobBudget(id(req), z.object({ hardLimit: z.number().int().min(10_000).max(20_000_000) }).parse(req.body).hardLimit));
+  app.post("/api/jobs/:id/finish-partial", async (req) => sdk.finishPartialJob(id(req)));
   app.post("/api/jobs/:id/resume", async (req) =>
     sdk.resumeJob(
       id(req),
@@ -233,7 +237,9 @@ export async function createApp(
     let skill = "";
     try {
       skill = await readFile(
-        path.join(j.output, "skill", j.skillName, "SKILL.md"),
+        j.context
+          ? path.join(sdk.cfg.dataDir, "contexts", j.context.contextId, j.context.version, "skill", j.context.contextId, "SKILL.md")
+          : path.join(j.output, "skill", j.skillName, "SKILL.md"),
         "utf8",
       );
     } catch {}

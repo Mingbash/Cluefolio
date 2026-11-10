@@ -21,7 +21,7 @@ if [[ "${1:-}" == "--stop" ]]; then
 fi
 
 open_workbench() {
-  if [[ "${SHIZHI_NO_OPEN:-}" != 1 ]]; then /usr/bin/open "$url"; fi
+  if [[ "${CLUEFOLIO_NO_OPEN:-}" != 1 ]]; then /usr/bin/open "$url"; fi
 }
 if /usr/bin/curl -fsS --max-time 1 "${url}api/projects" >/dev/null 2>&1; then
   open_workbench
@@ -37,7 +37,7 @@ node_bin="$(command -v node)" || { print -u2 "请先安装 Node.js 24。"; exit 
 mkdir -p "$log_dir"
 /usr/bin/screen -dmS "xhs-skill-distiller-$port" /bin/zsh -c \
   'cd "$1" && print -r -- "$$" > "$4" && exec "$2" --import tsx apps/server/index.ts >>"$3" 2>&1' \
-  shizhi "$project_dir" "$node_bin" "$log_dir/screen-server.log" "$pid_file"
+  cluefolio "$project_dir" "$node_bin" "$log_dir/screen-server.log" "$pid_file"
 
 for _ in {1..20}; do
   if /usr/bin/curl -fsS --max-time 1 "${url}api/projects" >/dev/null 2>&1; then

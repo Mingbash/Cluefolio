@@ -15,7 +15,7 @@ import { hash, run } from "../packages/sdk/src/util.ts";
 
 /** Package only the audited public snapshot, never the working tree or its history. */
 export async function createSourceArchive(output: string) {
-  const temporary = await mkdtemp(path.join(os.tmpdir(), "shizhi-release-"));
+  const temporary = await mkdtemp(path.join(os.tmpdir(), "cluefolio-release-"));
   const entries: Zippable = {};
   const manifest: { path: string; sha256: string; mode: number }[] = [];
   const prefix = "Cluefolio/";
@@ -77,7 +77,7 @@ if (
   console.log(
     JSON.stringify(
       await createSourceArchive(
-        process.argv[2] ?? "dist/cluefolio-v0.1.0-rc4-source.zip",
+        process.argv[2] ?? "dist/cluefolio-v0.2.0-rc1-source.zip",
       ),
       null,
       2,

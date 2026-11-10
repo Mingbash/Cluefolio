@@ -38,10 +38,10 @@ export class TokenBudget {
   snapshot() { return { hardLimit: this.hardLimit, degradedAt: this.degradedAt, used: this.used(), byStage: Object.fromEntries(this.usage) }; }
 }
 
-type UsageRecord = { id: string; used: number };
+type UsageRecord = { id: string; used: number; hardLimit?: number };
 
-export const inputBudgetError = () =>
-  new TaskError("TOKEN_BUDGET", "同一任务累计模型输入将超过 1,000,000 token，已停止投递新材料");
+export const inputBudgetError = (limit = DEFAULT_TOKEN_BUDGET.hardLimit) =>
+  new TaskError("TOKEN_BUDGET", `同一任务累计模型输入将超过 ${limit.toLocaleString()} token，已停止投递新材料`);
 
 /** Durable, atomic accounting shared by the CLI, workbench, and Desktop MCP. */
 export class JobInputBudget {
@@ -49,6 +49,25 @@ export class JobInputBudget {
 
   used() {
     return this.store.get<UsageRecord>("input-budget", this.jobId)?.used ?? 0;
+  }
+
+  limit() {
+    return this.store.get<UsageRecord>("input-budget", this.jobId)?.hardLimit ?? DEFAULT_TOKEN_BUDGET.hardLimit;
+  }
+
+  snapshot() { return { used: this.used(), hardLimit: this.limit(), remaining: Math.max(0, this.limit() - this.used()) }; }
+
+  setInitialLimit(limit: number) {
+    if (this.used() !== 0 || !Number.isSafeInteger(limit) || limit < 10_000 || limit > 20_000_000)
+      throw new TaskError("TOKEN_BUDGET", "无法设置初始预算");
+    this.store.transaction(() => this.write(0, limit));
+  }
+
+  raiseLimit(limit: number) {
+    if (!Number.isSafeInteger(limit) || limit < this.limit() || limit > 20_000_000)
+      throw new TaskError("TOKEN_BUDGET", "新预算必须高于当前预算，且不超过 20,000,000 token");
+    this.store.transaction(() => this.write(this.used(), limit));
+    return this.snapshot();
   }
 
   seedLegacy(used: number) {
@@ -60,7 +79,7 @@ export class JobInputBudget {
     if (!Number.isSafeInteger(amount) || amount < 0) throw inputBudgetError();
     this.store.transaction(() => {
       const used = this.used();
-      if (used + amount > DEFAULT_TOKEN_BUDGET.hardLimit) throw inputBudgetError();
+      if (used + amount > this.limit()) throw inputBudgetError(this.limit());
       this.write(used + amount);
     });
   }
@@ -72,11 +91,11 @@ export class JobInputBudget {
       this.write(next);
       return next;
     });
-    if (used > DEFAULT_TOKEN_BUDGET.hardLimit) throw inputBudgetError();
+    if (used > this.limit()) throw inputBudgetError(this.limit());
   }
 
-  private write(used: number) {
-    const record = { id: this.jobId, used };
+  private write(used: number, hardLimit = this.limit()) {
+    const record = { id: this.jobId, used, hardLimit };
     this.store.put("input-budget", record);
   }
 }

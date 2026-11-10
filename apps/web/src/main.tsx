@@ -45,8 +45,13 @@ function count(m: Metric) {
       ? "待读取"
       : (m.approximate ? "约 " : "") + (m.raw || String(m.value));
 }
+function sourceDate(value: string | null | undefined) {
+  if (!value) return "日期未确认";
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? value : date.toLocaleDateString("zh-CN", { year: "numeric", month: "long", day: "numeric" });
+}
 const pages = {
-  context: { title: "按问题找原文", description: "从你整理的小红书笔记中找到相关观点，回到原文核对。" },
+  context: { title: "按问题找原文", description: "收藏时觉得有用，工作时想不起在哪？在这里找回可复用的原则、适用条件、上游来源和博主自己的解释。" },
   library: { title: "笔记库", description: "导入小红书笔记，勾选想整理的内容。" },
   tasks: { title: "任务进度", description: "查看每篇笔记的处理进度，或继续未完成的任务。" },
   results: { title: "处理结果", description: "查看整理出的内容、原始来源和检查结果。" },
@@ -55,7 +60,7 @@ const pages = {
 };
 type Page = keyof typeof pages;
 const standaloneScope = "standalone";
-const scopeStorageKey = "shizhi.project-by-page";
+const scopeStorageKey = "cluefolio.project-by-page";
 function readProjectScopes(): Partial<Record<Page, string>> {
   try {
     const saved = JSON.parse(localStorage.getItem(scopeStorageKey) ?? "{}");
@@ -305,7 +310,7 @@ function App() {
       <aside className="sidebar">
         <a className="brand" href="/" aria-label="Cluefolio 首页">
           <span>
-            Cluefolio<small>小红书知识库</small>
+            Cluefolio<small>Context 淘金盆</small>
           </span>
         </a>
         <nav aria-label="工作台导航">
@@ -781,6 +786,19 @@ function App() {
                       {j.status === "running" && "…"}
                     </p>
                     {j.error && <p className="warning">{friendlyFailure(j.error, undefined, "请查看下方哪些笔记还没处理完，再继续任务。")}</p>}
+                    {j.budget && <p className="subtle">材料预算：已用 {j.budget.used.toLocaleString()} / {j.budget.hardLimit.toLocaleString()} token。这里只估算 Cluefolio 投递的材料，不是 Agent 会话账单。</p>}
+                    {j.stage === "预算已用完" && j.budgetEstimate && <div className="budget-recovery">
+                      <p>已处理 {j.selected.length - j.budgetEstimate.remainingNotes.length} / {j.selected.length} 篇。还有 {j.budgetEstimate.remainingNotes.length} 篇未完成；继续预计需再增加约 {j.budgetEstimate.additional.toLocaleString()} token（估算值）。</p>
+                      <small>待处理：{j.budgetEstimate.remainingTitles.join("、")}</small>
+                      <div className="job-actions">
+                        <button className="secondary" disabled={busy} onClick={() => action(() => api(`/jobs/${j.id}/finish-partial`, "POST", {}))}>用已完成部分生成草稿</button>
+                        <button className="primary" disabled={busy} onClick={() => action(async () => {
+                          const target = (j.budget?.hardLimit ?? 1_000_000) + j.budgetEstimate!.additional;
+                          await api(`/jobs/${j.id}/budget`, "POST", { hardLimit: target });
+                          setNotice(`预算已提高到 ${target.toLocaleString()} token。可以继续原任务。`);
+                        })}>增加预计预算</button>
+                      </div>
+                    </div>}
                     <div className="job-table">
                       <table>
                         <thead>
@@ -909,12 +927,12 @@ function App() {
                       <h2>{p?.name ?? "笔记整理结果"}</h2>
                       <p>
                         {job.status === "complete"
-                          ? (job.executor === "desktop" ? "知识库已准备好，可以查看或下载。" : "检查已通过，可以下载结果或安装技能。")
+                          ? (job.executor === "desktop" ? "Context 已准备好，可在 Agent 聊天中选择 Skill 提问。" : "检查已通过，可以下载结果或安装技能。")
                           : "目前只展示已完成的部分。"}
                       </p>
                       {job.context && (
                         <p className="subtle">
-                          {job.context.status === "complete" ? "知识库已就绪" : "知识库草稿"} · 已为 {job.context.processedClaims}/{job.context.totalClaims} 条观点查找出处
+                          {job.context.status === "complete" ? "Context 已就绪" : "Context 草稿"} · 调用 Skill：{job.context.skillName ?? job.context.contextId} · 已为 {job.context.processedClaims}/{job.context.totalClaims} 条观点查找出处
                         </p>
                       )}
                     </div>
@@ -941,9 +959,9 @@ function App() {
                         <button className="secondary" onClick={() => {
                           setContextByProject(previous => ({ ...previous, [job.projectId]: job.context!.contextId }));
                           navigate("context", job.projectId);
-                        }}>打开知识库</button>
+                        }}>打开 Context</button>
                       )}
-                      {job.executor !== "desktop" && job.status === "complete" && (
+                      {job.status !== "running" && job.context && (
                         <button
                           className="primary"
                           onClick={() =>
@@ -953,11 +971,11 @@ function App() {
                                 "POST",
                                 {},
                               );
-                              setNotice("已安装。可以在 Codex 中使用这个技能。");
+                              setNotice("调用 Skill 已安装。在 Agent 任务聊天中选择它提问。");
                             })
                           }
                         >
-                          安装到 Codex
+                          重新安装调用 Skill
                         </button>
                       )}
                     </div>
@@ -966,9 +984,14 @@ function App() {
                     <section>
                       {job.executor === "desktop" ? (
                         <>
-                          <h3>知识库文件</h3>
-                          <p>{job.context ? "查看笔记要点和出处，回看相关原文。" : "任务完成后，可以在这里查看和下载知识库。"}</p>
-                          {job.context && <a className="button secondary" href={`/api/contexts/${job.context.contextId}/download?version=${job.context.version}`}>下载知识库</a>}
+                          <h3>Context 文件</h3>
+                          <p>{job.context ? "查看笔记要点和出处，回看相关原文。" : "任务完成后，可以在这里查看和下载 Context。"}</p>
+                          {job.context && <a className="button secondary" href={`/api/contexts/${job.context.contextId}/download?version=${job.context.version}`}>下载 Context</a>}
+                          {job.context && <>
+                            <h3>调用 Skill：{job.context.skillName ?? job.context.contextId}</h3>
+                            <p>在 Agent 任务聊天中选择这个 Skill 提问；它会从本机 Context 读取依据。</p>
+                            <pre className="document">{result?.skill || "正在读取调用 Skill…"}</pre>
+                          </>}
                         </>
                       ) : (
                         <>
@@ -1117,7 +1140,7 @@ function App() {
                       <select id="section-project" value={pid} disabled={(!projects.length && !standaloneContexts.length) || busy} onChange={event => changeProject(event.target.value)}>
                         {!projects.length && !standaloneContexts.length && <option value="">还没有项目</option>}
                         {projects.map(project => <option key={project.id} value={project.id}>{project.name}</option>)}
-                        {!!standaloneContexts.length && <option value={standaloneScope}>独立导入的知识库</option>}
+                        {!!standaloneContexts.length && <option value={standaloneScope}>独立导入的 Context</option>}
                       </select>
                     </label>
                     {selectedContext && <label htmlFor="context-picker">搜索范围
@@ -1147,17 +1170,17 @@ function App() {
                       </div>
                       <div className="question-footer">
                         <p>{selectedContext.status === "complete"
-                          ? `从这个知识库的 ${selectedContext.counts.documents} 个来源里查找。`
+                          ? `从这个 Context 的 ${selectedContext.counts.documents} 个来源里查找。`
                           : "当前是草稿，只搜索已整理的内容。"}</p>
                         <button type="button" className="text-button" disabled={!contextQuery.trim()} onClick={() => action(async () => {
-                          await navigator.clipboard.writeText(`请用 Cluefolio 知识库 ${contextId}（版本 ${contextVersion}）回答以下问题，并附上可以打开的出处。\n${contextQuery}`);
+                          await navigator.clipboard.writeText(`请用 Cluefolio Context ${contextId}（版本 ${contextVersion}）回答以下问题，并附上可以打开的出处。\n${contextQuery}`);
                           setNotice("已复制问题。请粘贴到 Codex 对话里发送。");
                         })}>复制问题到 Codex</button>
                       </div>
                     </form>
                   ) : (
                     <div className="search-empty">
-                      <h2>{!loaded ? "正在加载项目…" : p ? "这个项目还没有可搜索的知识库" : "先建一个项目"}</h2>
+                      <h2>{!loaded ? "正在加载项目…" : p ? "这个项目还没有可搜索的 Context" : "先建一个项目"}</h2>
                       {loaded && <><p>{p
                         ? "先导入并整理笔记。完成后，就能在这里提问和查原文。"
                         : "导入你想反复查阅的笔记，整理完成后就可以提问。"}</p>
@@ -1172,7 +1195,7 @@ function App() {
                       <p className="subtle">{contextPacket.evidence.length
                         ? "打开下方条目可以核对原文。需要完整回答时，把问题发给 Codex。"
                         : "没有找到相关原文。试试换个关键词，或把问题缩小到一个主题。"}</p>
-                      {contextPacket.recommendations?.length > 0 && <div><h4>值得先看的来源</h4>{contextPacket.recommendations.map((item: any) => <p key={item.url}><a href={item.url} target="_blank" rel="noreferrer">{item.title}</a><br/><small>{item.kind === "upstream" ? "可查看这条观点的原作。" : item.kind === "reading-lead" ? "可打开原页面进一步查阅。" : "可查看博主怎样解释或应用这条观点。"}</small></p>)}</div>}
+                      {contextPacket.recommendations?.length > 0 && <div><h4>值得先看的来源</h4>{contextPacket.recommendations.map((item: any) => <p key={item.url}><a href={item.url} target="_blank" rel="noreferrer">{item.title}</a><br/><small>{sourceDate(item.publishedAt)} · {item.kind === "upstream" ? "可查看这条观点的原作。" : item.kind === "reading-lead" ? "可打开原页面进一步查阅。" : "可查看博主怎样解释或应用这条观点。"}</small></p>)}</div>}
                       <div className="methods">
                         {contextPacket.evidence.map((item: any) => {
                           const sourceProject = projects.find(project => project.id === selectedContext?.sourceProjectId);
@@ -1180,6 +1203,7 @@ function App() {
                           return <details key={item.id}>
                             <summary>{item.source.title} · {item.locator.page ? `第 ${item.locator.page} 页` : item.locator.start !== undefined ? `${item.locator.start.toFixed(1)}–${item.locator.end.toFixed(1)} 秒` : "正文"}</summary>
                             <p>{item.text}</p>
+                            <small>{sourceDate(item.source.publishedAt)} · 涉及价格、规则、市场数字时，请核对当前一手来源。</small>
                             <div className="review-actions">
                               {sourceNote && sourceProject && <button className="text-button" onClick={() => void openNote(sourceNote, item.locator.segmentId, sourceProject.id, item.locator.start, item.locator.page)}>查看对应片段</button>}
                               <a href={item.locator.url || item.source.url} target="_blank" rel="noreferrer">打开来源网页</a>
@@ -1192,8 +1216,8 @@ function App() {
               {overview && (
                 <>
                   <div className="knowledge-heading">
-                    <h2>知识库内容</h2>
-                    <a className="button secondary" href={`/api/contexts/${contextId}/download?version=${contextVersion}`}>下载知识库</a>
+                    <h2>Context 内容</h2>
+                    <a className="button secondary" href={`/api/contexts/${contextId}/download?version=${contextVersion}`}>下载 Context</a>
                   </div>
                   {overview.manifest.status !== "complete" && !overview.manifest.capabilities.includes("agent-driven") && (
                     <button className="secondary" disabled={busy} onClick={() => action(async () => {
@@ -1208,6 +1232,7 @@ function App() {
                         <details key={item.id} open>
                           <summary>{item.title}</summary>
                           <p>{item.statement}</p>
+                          <small>{sourceDate(item.temporal?.sourceDate)}{item.temporal?.sensitivity === "time-sensitive" ? " · 给执行建议前需重查当前来源" : " · 使用前核对适用条件"}</small>
                           <small>适用范围 {item.scope.join("；") || "查看出处"}</small>
                           {!!item.exceptions.length && <small>例外 {item.exceptions.join("；")}</small>}
                           {item.claimIds.map((id: string, index: number) => <button key={id} className="text-button" onClick={() => setFocusClaim({ id })}>查看出处 {index + 1}</button>)}
@@ -1220,6 +1245,7 @@ function App() {
                         <details key={item.id}>
                           <summary>{item.title}</summary>
                           <p>{item.statement}</p>
+                          <small>{sourceDate(item.temporal?.sourceDate)}{item.temporal?.sensitivity === "time-sensitive" ? " · 给执行建议前需重查当前来源" : " · 使用前核对适用条件"}</small>
                           <small>适用条件 {item.conditions.join("；") || "查看出处"}</small>
                           {!!item.exceptions.length && <small>例外 {item.exceptions.join("；")}</small>}
                           {item.claimIds.map((id: string, index: number) => <button key={id} className="text-button" onClick={() => setFocusClaim({ id })}>查看出处 {index + 1}</button>)}
@@ -1240,7 +1266,7 @@ function App() {
                       <p><strong>{contextQuality.integrity ? "文件检查通过" : "部分文件缺失或有改动"}</strong> · {contextQuality.resolved}／{contextQuality.total} 条观点已完成来源检查 · {contextQuality.statements} 条观点和原则 · {contextQuality.reviews} 处已手动更正</p>
                       {contextQuality.failures.map((file: string) => <p className="warning" key={file}>{file}</p>)}
                       {contextQuality.metrics && <p>前 10 条搜索结果覆盖的参考内容 {(contextQuality.metrics.recallAt10 * 100).toFixed(1)}% · 推荐原作正确率 {contextQuality.metrics.upstreamPrecision == null ? "暂未测得" : `${(contextQuality.metrics.upstreamPrecision * 100).toFixed(1)}%`} · 把原创误判为搬运的比例 {(contextQuality.metrics.falseDerivativeRate * 100).toFixed(1)}%</p>}
-                      {!contextQuality.metrics && <p className="subtle">这个知识库还没有搜索和来源推荐的测试记录。</p>}
+                      {!contextQuality.metrics && <p className="subtle">这个 Context 还没有搜索和来源推荐的测试记录。</p>}
                       {contextQuality.timings.length > 0 && <p className="subtle">各步骤用时 {contextQuality.timings.map((item: any) => `${stageTimingLabels[item.stage] ?? "处理笔记"} ${(item.elapsedMs / 1000).toFixed(1)} 秒`).join(" · ")}</p>}
                     </div>}
                   </section>
@@ -1264,6 +1290,7 @@ function App() {
                           skillName: f.get("skillName"),
                           purpose: f.get("purpose"),
                           limit: Number(f.get("limit")),
+                          tokenBudget: Number(f.get("tokenBudget")),
                         }),
                       );
                     }}
@@ -1273,14 +1300,14 @@ function App() {
                       <input name="name" required defaultValue={p.name} />
                     </label>
                     <label>
-                      知识库标识
+                      Context 标识
                       <input
                         name="skillName"
                         required
                         pattern="[a-z0-9][a-z0-9_-]{0,63}"
                         defaultValue={p.skillName}
                       />
-                      <small>用于在 Codex 中找到知识库。请用小写字母、数字、短横线或下划线。</small>
+                      <small>用于在 Agent 中找到这个 Context。请用小写字母、数字、短横线或下划线。</small>
                     </label>
                     <label>
                       每次最多选几篇
@@ -1295,7 +1322,12 @@ function App() {
                       <small>默认 10 篇，可填 1 到 100。</small>
                     </label>
                     <label>
-                      你想用这个知识库做什么
+                      每项任务的材料预算
+                      <input name="tokenBudget" type="number" min="10000" max="20000000" step="10000" required defaultValue={p.tokenBudget ?? 1000000} />
+                      <small>默认 1,000,000 token。预算用完会暂停；可生成草稿或增加预算继续。</small>
+                    </label>
+                    <label>
+                      你想用这个 Context 做什么
                       <textarea
                         name="purpose"
                         rows={5}

@@ -23,7 +23,7 @@ export const stageTimingLabels: Record<string, string> = {
   index: "准备搜索",
   evaluate: "检查结果",
   package: "打包文件",
-  register: "保存知识库",
+  register: "保存 Context",
 };
 
 const errors: Record<string, string> = {
@@ -43,7 +43,7 @@ const errors: Record<string, string> = {
   CHECKPOINT: "本机缺少所需的笔记文件。请联网后再继续。",
   MODEL_OUTPUT: "Codex 返回的结果没通过检查。可以继续任务，再试一次。",
   TIMEOUT: "等候时间过长。请检查网络或浏览器连接，再试一次。",
-  EXISTS: "Codex 已装有同名技能。请在项目设置换个知识库标识，再重新创建任务。",
+  EXISTS: "Agent 已装有同名 Skill。请在项目设置换个 Context 标识，再重新创建任务。",
 };
 
 export function friendlyFailure(

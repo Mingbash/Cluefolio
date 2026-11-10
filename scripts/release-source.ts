@@ -23,7 +23,9 @@ const files = [
   ".github/workflows/ci.yml",
   "docs/validation.md",
   "docs/release-notes-v0.1.0.md",
+  "docs/release-notes-v0.2.0-rc1.md",
   "docs/release-readiness.md",
+  "docs/loom-video-script.md",
 ];
 const directories = [
   "apps",
@@ -34,6 +36,7 @@ const directories = [
 ];
 const sourceTypes = /\.(?:ts|tsx|js|mjs|json|html|css|swift|md|ya?ml)$/i;
 const forbidden = [
+  /\x73\x68\x69\x7a\x68\x69|\u62fe\u77e5/i,
   /(?:\/Users\/|\/home\/)[^\s"'<>\/]+\//,
   /\bxsec_token\s*=\s*[A-Za-z0-9_-]{16,}/,
   /\b(?:sk-(?:proj-)?|gh[pousr]_|github_pat_)[A-Za-z0-9_-]{20,}/,
@@ -61,7 +64,7 @@ const manifest = await Promise.all(
     return { file, contents, mode: (await stat(file)).mode & 0o777 };
   }),
 );
-const destination = path.resolve(process.argv[2] ?? "dist/shizhi-source");
+const destination = path.resolve(process.argv[2] ?? "dist/cluefolio-source");
 await mkdir(path.dirname(destination), { recursive: true });
 await mkdir(destination);
 for (const { file, contents, mode } of manifest) {

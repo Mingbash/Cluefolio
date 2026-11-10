@@ -13,6 +13,8 @@
     "cli": "node --import tsx scripts/cli.ts",
     "context:mcp": "node --import tsx scripts/context-mcp.ts",
     "setup": "node --import tsx scripts/setup.ts",
+    "mcp:migrate": "node --import tsx scripts/migrate-local-registration.ts",
+    "context:install-existing": "node --import tsx scripts/context-install-existing.ts",
     "evaluate:context": "node --import tsx scripts/evaluate-context.ts",
     "release:source": "node --import tsx scripts/release-source.ts",
     "release:candidate": "node --import tsx scripts/release-archive.ts"

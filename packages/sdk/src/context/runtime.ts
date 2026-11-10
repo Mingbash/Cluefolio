@@ -8,6 +8,7 @@ import type { Claim, ContextManifest, ContextPackage, EvidenceUnit, Originality,
 import { readJsonl, verifyContextDirectory, writeContextPackage } from "./package.ts";
 import { isUpstreamOrigin } from "./attribution.ts";
 import { makeZip } from "../export.ts";
+import { annotateTemporality } from "./temporal.ts";
 
 export type SearchHit = {
   evidence: EvidenceUnit;
@@ -298,6 +299,7 @@ export class ContextRuntime {
   }
   async getOverview(contextId: string, version = "0.1.0") {
     const pkg = await loadContextPackage(this.root(contextId, version));
+    annotateTemporality(pkg);
     return { manifest: pkg.manifest, theses: pkg.theses, axioms: pkg.axioms };
   }
   async search(contextId: string, query: string, options: { version?: string; limit?: number; sourceFamilyLimit?: number } = {}) {
@@ -378,6 +380,7 @@ export class ContextRuntime {
   }
   async buildContextPacket(contextId: string, query: string, options: { version?: string; maxChars?: number; limit?: number } = {}) {
     const { pkg, reviews } = await this.reviewedPackage(contextId, options.version);
+    annotateTemporality(pkg);
     const hits = await this.search(contextId, query, { version: options.version, limit: options.limit ?? 12 });
     const queryTerms = terms(query.slice(0, 512));
     const directlyMatchedClaims = pkg.claims
@@ -434,14 +437,14 @@ export class ContextRuntime {
       for (const candidate of candidates) {
         if (!candidate.document || !candidate.document.url || seenFamily.has(candidate.document.sourceFamily)) continue;
         seenFamily.add(candidate.document.sourceFamily);
-        recommendations.push({ kind: candidate.kind, title: candidate.document.title, url: candidate.document.url, accessType: candidate.document.accessType, reason: candidate.reason, claimId: claim.id });
+        recommendations.push({ kind: candidate.kind, title: candidate.document.title, url: candidate.document.url, accessType: candidate.document.accessType, publishedAt: candidate.document.publishedAt, reason: candidate.reason, claimId: claim.id });
         if (recommendations.length >= 4) break;
       }
       if (recommendations.length >= 4) break;
     }
     const evidence = expandedEvidence
       .sort((a, b) => b.score - a.score || Number(b.evidence.verified) - Number(a.evidence.verified))
-      .map((hit) => ({ id: hit.evidence.id, text: hit.evidence.text, locator: hit.evidence.locator, verified: hit.evidence.verified, source: { id: hit.document.id, title: hit.document.title, author: hit.document.author, url: hit.document.url, sourceFamily: hit.document.sourceFamily, accessType: hit.document.accessType }, claimIds: hit.claimIds }));
+      .map((hit) => ({ id: hit.evidence.id, text: hit.evidence.text, locator: hit.evidence.locator, verified: hit.evidence.verified, source: { id: hit.document.id, title: hit.document.title, author: hit.document.author, url: hit.document.url, publishedAt: hit.document.publishedAt, dateLabel: hit.document.publishedAt ?? "日期未确认", sourceFamily: hit.document.sourceFamily, accessType: hit.document.accessType }, claimIds: hit.claimIds }));
     const conciseClaims = claims.map((claim) => ({
       id: claim.id,
       text: claim.text,
@@ -451,6 +454,7 @@ export class ContextRuntime {
       creatorContribution: claim.creatorContribution,
       contributionDescription: pkg.contributions.find(item => item.claimId === claim.id)?.description,
       reviewReason: reviews.find(item => item.claimId === claim.id)?.reason,
+      temporal: claim.temporal,
     }));
     const conciseStatements = relatedStatements.map((statement) => ({
       id: statement.id,
@@ -459,12 +463,14 @@ export class ContextRuntime {
       statement: statement.statement,
       conditions: statement.conditions,
       exceptions: statement.exceptions,
+      conflicts: statement.conflicts,
       claimIds: statement.claimIds,
+      temporal: statement.temporal,
     }));
     const packet = {
       context: { id: pkg.manifest.contextId, version: pkg.manifest.version, name: pkg.manifest.name, status: pkg.manifest.status },
       query,
-      answerProtocol: ["先回答当前决策或任务", "区分上游事实、博主贡献和当前推导", "只引用 Evidence Packet 中的证据", "给出下一步行动", "推荐 2–4 个最相关来源并说明理由"],
+      answerProtocol: ["先回答当前决策或任务", "区分上游事实、博主贡献和当前推导", "只引用 Evidence Packet 中的证据", "价格、平台规则、市场数据及具体操作建议先标来源日期，再查询当前一手来源后给执行建议；缺日期写日期未确认", "给出下一步行动", "推荐 2–4 个最相关来源并说明理由"],
       statements: conciseStatements,
       claims: conciseClaims,
       layers: {

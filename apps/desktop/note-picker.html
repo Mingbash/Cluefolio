@@ -28,14 +28,14 @@
     <button id="prev">上一页</button><span id="page"></span><button id="next">下一页</button>
   </div>
   <div class="row">
-    <button id="start" disabled>开始蒸馏</button>
+    <button id="start" disabled>开始构建</button>
     <button id="clear" disabled>清空选择</button>
     <span id="count"></span>
   </div>
 </section>
 <div id="job" class="row" hidden>
   <button id="pause" hidden>暂停</button>
-  <button id="continue" hidden>继续蒸馏</button>
+  <button id="continue" hidden>继续构建</button>
   <span id="jobId"></span>
 </div>
 <p id="status" role="status" aria-live="polite">正在连接 Codex…</p>
@@ -130,7 +130,7 @@
     el("prev").disabled = page === 0;
     el("next").disabled = page + 1 >= pages;
     el("status").textContent = result.scan === "running" ? "正在导入笔记，可点刷新查看新结果。"
-      : result.total ? "勾选需要蒸馏的笔记。" : "没有符合条件的笔记，可更换项目或刷新。";
+      : result.total ? "勾选要用于构建 Context 的笔记。" : "没有符合条件的笔记，可更换项目或刷新。";
     selectionChanged();
     resize();
   }
@@ -173,7 +173,7 @@
   async function handoff() {
     const reply = await request("ui/message", {
       role: "user",
-      content: [{ type: "text", text: JSON.stringify({ event: "shizhi_start", jobId }) }],
+      content: [{ type: "text", text: JSON.stringify({ event: "cluefolio_start", jobId }) }],
     });
     if (reply?.isError) throw new Error("Codex 未接收任务，可在对话中用任务编号继续");
   }
@@ -187,8 +187,10 @@
       if (job.status === "complete") clearInterval(timer);
       el("jobId").textContent = "任务 " + jobId;
       el("pause").hidden = job.status !== "running";
-      el("continue").hidden = job.status === "running" || job.status === "complete";
+      const budgetPaused = job.stage === "预算已用完" && !!job.budgetEstimate;
+      el("continue").hidden = job.status === "running" || job.status === "complete" || budgetPaused;
       el("status").textContent = job.stage + " · 已处理 " + job.processed + " / " + job.selected + " 篇 · 已保存 " + job.checkpoints + " 个模型步骤" +
+        (budgetPaused ? " · 已用 " + job.budget.used.toLocaleString() + " / " + job.budget.hardLimit.toLocaleString() + " token；待处理 " + job.budgetEstimate.remainingTitles.join("、") + "；预计还需约 " + job.budgetEstimate.additional.toLocaleString() + " token（估算值）" : "") +
         (job.error ? " · " + job.error : "") +
         (job.context ? " · Context " + job.context.contextId : "");
       resize();
@@ -226,7 +228,7 @@
     catch (error) { showError(error); }
   };
   request("ui/initialize", {
-    appInfo: { name: "shizhi-desktop", version: "0.1.0" },
+    appInfo: { name: "cluefolio-desktop", version: "0.1.0" },
     appCapabilities: {}, protocolVersion: "2026-01-26",
   }).then(() => {
     post({ method: "ui/notifications/initialized" });

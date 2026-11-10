@@ -18,6 +18,8 @@ import {
   JobInputBudget,
   DEFAULT_TOKEN_BUDGET,
   inputBudgetError,
+  installContextSkill,
+  annotateTemporality,
   TokenBudget,
   writeContextPackage,
 } from "./context/index.ts";
@@ -90,16 +92,20 @@ export class Distiller {
     skillName = "creator-advisor",
     limit = this.cfg.defaultLimit,
     purpose = "",
+    tokenBudget = DEFAULT_TOKEN_BUDGET.hardLimit,
   ): Project {
     safeName(skillName);
     if (!Number.isInteger(limit) || limit < 1 || limit > 100)
       throw new TaskError("LIMIT", "上限必须为 1 至 100 的整数");
+    if (!Number.isSafeInteger(tokenBudget) || tokenBudget < 10_000 || tokenBudget > 20_000_000)
+      throw new TaskError("TOKEN_BUDGET", "材料预算必须在 10,000 至 20,000,000 token 之间");
     const p: Project = {
       version: 1,
       id: randomUUID(),
       name,
       skillName,
       purpose,
+      tokenBudget,
       limit,
       selected: [],
       createdAt: new Date().toISOString(),
@@ -112,7 +118,7 @@ export class Distiller {
   updateProject(
     id: string,
     patch: Partial<
-      Pick<Project, "name" | "skillName" | "purpose" | "limit" | "selected">
+      Pick<Project, "name" | "skillName" | "purpose" | "limit" | "selected" | "tokenBudget">
     >,
   ) {
     return this.store.mutateProject(id, (p) => {
@@ -122,6 +128,8 @@ export class Distiller {
       else if (!Number.isInteger(limit) || limit < 1 || limit > 100)
         throw new TaskError("LIMIT", "上限必须为1至100");
       if (patch.skillName) safeName(patch.skillName);
+      if (patch.tokenBudget !== undefined && (!Number.isSafeInteger(patch.tokenBudget) || patch.tokenBudget < 10_000 || patch.tokenBudget > 20_000_000))
+        throw new TaskError("TOKEN_BUDGET", "材料预算必须在 10,000 至 20,000,000 token 之间");
       if (ids.some((id) => !p.notes.some((n) => n.id === id)))
         throw new TaskError("SELECTION", "选择了项目之外的笔记");
       Object.assign(p, patch);
@@ -526,6 +534,7 @@ export class Distiller {
       selected: [...selected],
       skillName: desktopSelection ? p.skillName.slice(0, 46) + "-" + id.slice(0, 8) : p.skillName,
       purpose: p.purpose,
+      tokenBudget: p.tokenBudget ?? DEFAULT_TOKEN_BUDGET.hardLimit,
       noteStates: Object.fromEntries(
         selected.map((id) => [
           id,
@@ -536,12 +545,75 @@ export class Distiller {
       updatedAt: now,
     };
     this.store.put("job", j);
+    if (j.tokenBudget !== DEFAULT_TOKEN_BUDGET.hardLimit) {
+      const record = { id: j.id, used: 0, hardLimit: j.tokenBudget! };
+      this.store.put("input-budget", record);
+    }
     return j;
   }
   getJob(id: string) {
     const j = this.store.get<Job>("job", id);
     if (!j) throw new TaskError("NOT_FOUND", "任务不存在");
+    const budget = new JobInputBudget(this.store, id).snapshot();
+    j.tokenBudget = budget.hardLimit;
+    j.budget = budget;
+    if (j.error?.includes("token") || j.error?.includes("预算")) {
+      const remainingNotes = j.selected.filter(noteId => j.noteStates[noteId]?.extract !== "complete");
+      const completed = j.selected.length - remainingNotes.length;
+      const perNote = completed ? Math.ceil(budget.used / completed) : 25_000;
+      const titles = this.store.project(j.projectId).notes;
+      j.budgetEstimate = { additional: Math.max(25_000, remainingNotes.length * Math.max(25_000, perNote) + 100_000 - budget.remaining), remainingNotes, remainingTitles: remainingNotes.map(noteId => titles.find(note => note.id === noteId)?.title || noteId), estimated: true };
+    }
     return j;
+  }
+  raiseJobBudget(id: string, limit: number) {
+    const j = this.getJob(id);
+    if (j.status === "running") throw new TaskError("BUSY", "请先等待当前步骤暂停");
+    const budget = new JobInputBudget(this.store, id).raiseLimit(limit);
+    j.tokenBudget = budget.hardLimit;
+    this.save(j);
+    return this.getJob(id);
+  }
+  async finishPartialJob(id: string) {
+    const j = this.getJob(id);
+    if (j.status === "running") throw new TaskError("BUSY", "请先等待当前任务暂停");
+    if (j.status === "complete") return j;
+    const output = path.join(this.cfg.dataDir, "projects", j.projectId, "jobs", id);
+    const sourceDir = path.join(output, "sources");
+    await mkdir(sourceDir, { recursive: true });
+    const analyses: any[] = [];
+    for (const noteId of j.selected) {
+      if (j.noteStates[noteId]?.extract !== "complete") continue;
+      const analysis = await json<any>(path.join(path.dirname(this.rawPath(j.projectId, noteId)), "analysis.json"));
+      if (analysis?.clean) analyses.push(analysis);
+    }
+    if (!analyses.length) throw new TaskError("INCOMPLETE", "尚无可用材料，无法生成草稿");
+    for (const analysis of analyses) await atomic(path.join(sourceDir, analysis.clean.id + ".json"), analysis.clean);
+    await atomic(path.join(output, "methods.json"), analyses.flatMap(item => item.methods ?? []));
+    await atomic(path.join(output, "quality.json"), { complete: false, selected: j.selected, processed: analyses.map(item => item.clean.id), missing: j.selected.filter(noteId => !analyses.some(item => item.clean.id === noteId)) });
+    const project = this.store.project(j.projectId);
+    const version = "0.1.0";
+    const directory = path.join(this.cfg.dataDir, "contexts", j.skillName, version);
+    const pkg = await migrateLegacyJob({ dataDir: this.cfg.dataDir, projectId: j.projectId, jobId: j.id, contextId: j.skillName, version, name: project.name, purpose: project.purpose });
+    pkg.manifest.status = "draft";
+    pkg.manifest.description = `部分材料草稿：已处理 ${analyses.length}/${j.selected.length} 篇笔记。`;
+    const budget = new JobInputBudget(this.store, j.id).snapshot();
+    pkg.manifest.tokenBudget = { hardLimit: budget.hardLimit, degradedAt: Math.floor(budget.hardLimit * .8), used: budget.used, cumulativeUsed: budget.used };
+    annotateTemporality(pkg);
+    await writeContextPackage(pkg, directory);
+    await buildContextIndex(directory);
+    const runtime = new ContextRuntime(this.cfg.dataDir);
+    await runtime.register(j.skillName, version);
+    const installed = await installContextSkill(pkg.manifest, directory);
+    await makeZip(path.join(directory, "skill", j.skillName), path.join(output, j.skillName + ".zip"));
+    await makeZip(sourceDir, path.join(output, "sources.zip"));
+    j.output = output;
+    j.context = { contextId: j.skillName, version, status: "draft", processedClaims: 0, totalClaims: pkg.claims.length, unresolvedClaims: pkg.claims.length, tokenUsed: budget.used, skillName: installed.name, skillPath: installed.path };
+    j.stage = "部分材料草稿";
+    j.status = "paused";
+    j.error = `已用 ${budget.used.toLocaleString()} / ${budget.hardLimit.toLocaleString()} token，已处理 ${analyses.length}/${j.selected.length} 篇；草稿已保存`;
+    this.save(j);
+    return this.getJob(id);
   }
   private save(j: Job) {
     j.updatedAt = new Date().toISOString();
@@ -597,8 +669,9 @@ export class Distiller {
       throw new TaskError("BUSY", "任务仍在运行或正在停止");
     const j = this.getJob(id);
     if (j.status === "complete") return j;
-    if (new JobInputBudget(this.store, id).used() >= DEFAULT_TOKEN_BUDGET.hardLimit)
-      throw inputBudgetError();
+    const inputBudget = new JobInputBudget(this.store, id);
+    if (inputBudget.used() >= inputBudget.limit())
+      throw inputBudgetError(inputBudget.limit());
     if ((j.executor === "desktop") !== !!this.desktopRunner)
       throw new TaskError("EXECUTOR", "请在原执行入口继续此任务");
     if (this.store.list<Job>("job").some(other =>
@@ -648,6 +721,8 @@ export class Distiller {
     }
     if (j.executor === "desktop" && !pkg.manifest.capabilities.includes("agent-driven")) pkg.manifest.capabilities.push("agent-driven");
     await writeContextPackage(pkg, directory);
+    pkg.manifest.tokenBudget.hardLimit = durableBudget.limit();
+    pkg.manifest.tokenBudget.degradedAt = Math.floor(durableBudget.limit() * .8);
     const budget = new TokenBudget(pkg.manifest.tokenBudget.hardLimit, pkg.manifest.tokenBudget.degradedAt);
     const mark = (stage: any, status: any, tokens = 0) => {
       const record = pkg.manifest.stages.find((item) => item.stage === stage);
@@ -679,6 +754,7 @@ export class Distiller {
     this.save(j);
     mark("synthesize", "running");
     ({ pkg } = await synthesizeContext(this.model, pkg, workDir, budget, signal));
+    annotateTemporality(pkg);
     signal.throwIfAborted();
     mark("synthesize", "complete", budget.stageUsed("synthesize"));
     pkg.manifest.tokenBudget.used = durableBudget.used();
@@ -703,6 +779,7 @@ export class Distiller {
     mark("evaluate", "complete");
     mark("register", "running");
     await runtime.register(j.skillName, version);
+    const installedSkill = await installContextSkill(pkg.manifest, directory);
     mark("register", "complete");
     await writeContextPackage(pkg, directory);
     await buildContextIndex(directory);
@@ -714,6 +791,8 @@ export class Distiller {
       totalClaims: pkg.claims.length,
       unresolvedClaims: unresolved,
       tokenUsed: durableBudget.used(),
+      skillName: installedSkill.name,
+      skillPath: installedSkill.path,
     };
     this.save(j);
     return pkg;
@@ -997,6 +1076,7 @@ export class Distiller {
       this.save(j);
     } catch (e: any) {
       j.status = signal.aborted && j.executor !== "desktop" ? "cancelled" : "paused";
+      if (e.code === "TOKEN_BUDGET") j.stage = "预算已用完";
       j.error = signal.aborted && j.executor === "desktop"
         ? "已暂停，已接受的检查点可以继续"
         : redact(e.message);
@@ -1018,8 +1098,10 @@ export class Distiller {
   }
   async install(id: string) {
     const j = this.getJob(id);
-    if (j.executor === "desktop")
-      throw new TaskError("EXECUTOR", "此任务产出 Context Package，可通过 Cluefolio MCP 查询");
+    if (j.context) {
+      const pkg = await loadContextPackage(path.join(this.cfg.dataDir, "contexts", j.context.contextId, j.context.version));
+      return (await installContextSkill(pkg.manifest, path.join(this.cfg.dataDir, "contexts", j.context.contextId, j.context.version))).path;
+    }
     if (j.status !== "complete")
       throw new TaskError("NOT_READY", "只有通过检查的skill可以安装");
     return installSkill(

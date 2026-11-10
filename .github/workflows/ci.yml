@@ -6,7 +6,11 @@ permissions:
   contents: read
 jobs:
   build:
-    runs-on: macos-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [macos-latest, macos-15-intel]
+    runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-node@v5
@@ -19,4 +23,12 @@ jobs:
       - run: node --check packages/opencli-plugin/commands.js
       - run: npm test
       - run: npm run build
+      - name: Check macOS Vision OCR
+        run: swiftc scripts/vision.swift -module-cache-path /tmp/cluefolio-swift-cache -o /tmp/cluefolio-vision && test "$(/tmp/cluefolio-vision)" = '[]'
+      - name: Check media tools
+        run: |
+          command -v ffmpeg >/dev/null || brew install ffmpeg
+          command -v whisper-cli >/dev/null || brew install whisper-cpp
+          ffmpeg -version >/dev/null
+          whisper-cli --help >/dev/null 2>&1
       - run: npm run release:candidate

@@ -9,7 +9,7 @@ import { hash, run } from "../packages/sdk/src/util.ts";
 
 test("public candidate matches sources, excludes private data and preserves Mac executable mode", async () => {
   const temporary = await mkdtemp(
-    path.join(os.tmpdir(), "shizhi-release-test-"),
+    path.join(os.tmpdir(), "cluefolio-release-test-"),
   );
   try {
     const output = path.join(temporary, "candidate.zip");
@@ -42,6 +42,8 @@ test("public candidate matches sources, excludes private data and preserves Mac 
       "apps/desktop/note-picker.html",
       ".github/workflows/ci.yml",
       "docs/release-readiness.md",
+      "docs/release-notes-v0.2.0-rc1.md",
+      "docs/loom-video-script.md",
     ])
       assert.ok(files[prefix + file], file);
     let foundLauncher = false;
